@@ -135,6 +135,11 @@ private:
     uint m_calibrationIdx;
     VectorXl m_tsOffsetsUsec;
 
+    uint m_tsyncAvgVecSize;
+    uint m_tsyncAvgCollectCount;
+    VectorXl m_tsyncAvgVecMaster;
+    VectorXl m_tsyncAvgVecDevice;
+
     bool m_haveExpectedOffset;
     uint m_expectedOffsetCalCount;
     microseconds_t m_expectedOffset;

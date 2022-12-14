@@ -197,8 +197,21 @@ bool FreqCounterSynchronizer::start()
     m_offsetChangeWaitBlocks = 0;
     m_applyIndexOffset = false;
 
+    m_tsyncAvgCollectCount = 0;
+    m_tsyncAvgVecSize = m_calibrationMaxBlockN / 6;
+    if (m_tsyncAvgVecSize < 4)
+        m_tsyncAvgVecSize = 4;
+    m_tsyncAvgVecMaster = VectorXl::Zero(m_tsyncAvgVecSize);
+    m_tsyncAvgVecDevice = VectorXl::Zero(m_tsyncAvgVecSize);
+
     m_lastSecondaryIdxUnandjusted = 0;
     m_lastMasterAssumedAcqTS = microseconds_t(0);
+
+    // sanity checks for programming mistakes
+    assert(m_tsyncAvgVecSize < m_calibrationMaxBlockN);
+    assert(m_tsyncAvgVecMaster.size() == m_tsyncAvgVecDevice.size());
+    assert(m_tsyncAvgVecDevice.size() == m_tsyncAvgVecSize);
+    assert(m_calibrationMaxBlockN > 1);
 
     return true;
 }
@@ -314,6 +327,17 @@ void FreqCounterSynchronizer::processTimestamps(const microseconds_t &blocksRecv
     if (m_offsetChangeWaitBlocks > 0)
         m_offsetChangeWaitBlocks--;
 
+    // check if we are supposed to write an offset sync timepoint to the tsync file, and if so complete
+    // the averaging vector for the final time and eventually write the data
+    if (m_tsyncAvgCollectCount > 0) {
+        m_tsyncAvgCollectCount--;
+        m_tsyncAvgVecDevice[m_tsyncAvgCollectCount] = std::lround((secondaryLastIdxUnadjusted + 1) * m_timePerPointUs);
+        m_tsyncAvgVecMaster[m_tsyncAvgCollectCount] = masterAssumedAcqTS.count();
+        if (m_tsyncAvgCollectCount == 0)
+            m_tswriter->writeTimes(std::lround(vectorMedianInplace(m_tsyncAvgVecDevice)),
+                                   std::lround(vectorMedianInplace(m_tsyncAvgVecMaster)));
+    }
+
     // do nothing if we have not enough average deviation from the norm
     if (abs(avgOffsetDeviationUsec) < m_toleranceUsec) {
         // we are within tolerance range!
@@ -408,14 +432,20 @@ void FreqCounterSynchronizer::processTimestamps(const microseconds_t &blocksRecv
             idxTimestamps -= VectorXu::LinSpaced(idxTimestamps.rows(), 0, m_indexOffset);
     }
 
-    // we're out of sync, record that fact to the tsync file if we are writing one
+    // We're out of sync, if we are writing a tsync file we will have to record that fact.
+    // Since the master time is subjected to imprecision due to e.g. USB communication and system load,
+    // and since by using rare-ish sync points individual points matter a lot more than the would otherwise,
+    // we record a bit more clock data and write the average master time to the tsync file later, instead of
+    // writing the current master time immediately.
     // NOTE: we have to use the unadjusted time value for the device clock - since we didn't need that until now,
     // we calculate it here from the unadjusted last index value of the current block.
     // 1 is added to secondaryLastIdxUnadjusted becuse the timestamp reflects the time *after* a sample was acquired,
     // so the zero-index needs to be offset by one.
-    if (m_strategies.testFlag(TimeSyncStrategy::WRITE_TSYNCFILE))
-        m_tswriter->writeTimes(microseconds_t(std::lround((secondaryLastIdxUnadjusted + 1) * m_timePerPointUs)),
-                               masterAssumedAcqTS);
+    if (m_strategies.testFlag(TimeSyncStrategy::WRITE_TSYNCFILE)) {
+        m_tsyncAvgCollectCount = m_tsyncAvgVecSize - 1;
+        m_tsyncAvgVecDevice[m_tsyncAvgCollectCount] = std::lround((secondaryLastIdxUnadjusted + 1) * m_timePerPointUs);
+        m_tsyncAvgVecMaster[m_tsyncAvgCollectCount] = masterAssumedAcqTS.count();
+    }
 
     m_lastTimeIndex = secondaryLastIdx;
 }
