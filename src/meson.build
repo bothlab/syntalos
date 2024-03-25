@@ -5,6 +5,7 @@ syntalos_main_inc_dir = include_directories('.')
 subdir('utils')
 subdir('fabric')
 subdir('roudi')
+subdir('mlink')
 subdir('uilib')
 subdir('pyworker')
 
